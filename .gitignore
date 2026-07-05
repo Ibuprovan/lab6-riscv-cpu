@@ -1,0 +1,40 @@
+# Vivado project files
+.Xil/
+vivado.jou
+vivado.log
+vivado_*.backup.jou
+vivado_*.backup.log
+*.backup.jou
+*.backup.log
+*.jou
+*.log
+dfx_runtime.txt
+
+# Vivado generated
+vivado/lab6_sid_sort_fpga/
+vivado/bitstream_check/
+*.xpr
+*.cache/
+*.hw/
+*.ip_user_files/
+usage_statistics_webtalk.*
+webtalk.*
+
+# Simulation artifacts
+*.out
+*.vcd
+sim_build/
+work/
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Temporary images (contain student ID of reference report)
+docs/images/
+
+# Python
+__pycache__/
+*.pyc
+.venv/

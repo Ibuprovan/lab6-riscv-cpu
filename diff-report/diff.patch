@@ -1,0 +1,1487 @@
+--- a/source-sc/EXT.v
++++ b/source-sc/EXT.v
+@@ -1,23 +0,0 @@
+-`include "ctrl_encode_def.v"
+-module EXT( 
+-    input	[11:0]			iimm, //instr[31:20], 12 bits
+-	input	[11:0]			simm, //instr[31:25, 11:7], 12 bits
+-	input	[11:0]			bimm, //instrD[31], instrD[7], instrD[30:25], instrD[11:8], 12 bits
+-	input	[19:0]			uimm, //U type
+-	input	[19:0]			jimm, //J type
+-	input	[5:0]			EXTOp,
+-
+-	output	reg [31:0] 	    immout
+-	);
+-
+-always  @(*)
+-	 case (EXTOp)
+-		`EXT_CTRL_ITYPE:	immout <= {{20{iimm[11]}}, iimm[11:0]};
+-		`EXT_CTRL_STYPE:	immout <= {{20{simm[11]}}, simm[11:0]};
+-		`EXT_CTRL_BTYPE:    immout <= {{19{bimm[11]}}, bimm[11:0], 1'b0};
+-		`EXT_CTRL_UTYPE:	immout <= {uimm[19:0], 12'b0};     //???????????12??0
+-		`EXT_CTRL_JTYPE:	immout <= {{21{jimm[19]}}, jimm[19:0], 1'b0};
+-		default:	        immout <= 32'b0;
+-	 endcase
+-       
+-endmodule
+
+--- a/source-sc/MIO_BUS.v
++++ b/source-sc/MIO_BUS.v
+@@ -0,0 +1,42 @@
++`timescale 1ns / 1ps
++
++module MIO_BUS(
++    input mem_w,
++    input [15:0] sw_i,
++    input [31:0] cpu_data_out,
++    input [31:0] cpu_data_addr,
++    input [31:0] ram_data_out,
++    output reg [31:0] cpu_data_in,
++    output reg [31:0] ram_data_in,
++    output reg [6:0] ram_addr,
++    output reg [31:0] cpuseg7_data,
++    output reg ram_we,
++    output reg seg7_we
++);
++
++    always @* begin
++        ram_addr = 7'h0;
++        ram_data_in = 32'h0;
++        cpuseg7_data = 32'h0;
++        cpu_data_in = 32'h0;
++        seg7_we = 1'b0;
++        ram_we = 1'b0;
++
++        case (cpu_data_addr)
++        32'hffff0004: begin
++            cpu_data_in = {16'h0, sw_i};
++        end
++        32'hffff000c: begin
++            cpuseg7_data = cpu_data_out;
++            seg7_we = mem_w;
++        end
++        default: begin
++            ram_addr = cpu_data_addr[8:2];
++            ram_data_in = cpu_data_out;
++            ram_we = mem_w;
++            cpu_data_in = ram_data_out;
++        end
++        endcase
++    end
++
++endmodule
+
+--- a/source-sc/Multi_CH32.v
++++ b/source-sc/Multi_CH32.v
+@@ -0,0 +1,45 @@
++`timescale 1ns / 1ps
++
++module Multi_CH32(
++    input clk,
++    input rst,
++    input EN,
++    input [5:0] ctrl,
++    input [31:0] Data0,
++    input [31:0] data1,
++    input [31:0] data2,
++    input [31:0] data3,
++    input [31:0] data4,
++    input [31:0] data5,
++    input [31:0] data6,
++    input [31:0] data7,
++    input [31:0] reg_data,
++    output reg [31:0] seg7_data
++);
++
++    reg [31:0] disp_data = 32'hAA55_55AA;
++
++    always @* begin
++        casex (ctrl)
++        6'b000000: seg7_data = disp_data;
++        6'b000001: seg7_data = data1;
++        6'b000010: seg7_data = data2;
++        6'b000011: seg7_data = data3;
++        6'b000100: seg7_data = data4;
++        6'b000101: seg7_data = data5;
++        6'b000110: seg7_data = data6;
++        6'b000111: seg7_data = data7;
++        6'b001xxx: seg7_data = 32'hFFFF_FFFF;
++        6'b01xxxx: seg7_data = 32'hFFFF_FFFF;
++        6'b1xxxxx: seg7_data = reg_data;
++        endcase
++    end
++
++    always @(posedge rst or posedge clk) begin
++        if (rst)
++            disp_data <= 32'hAA55_55AA;
++        else if (EN)
++            disp_data <= Data0;
++    end
++
++endmodule
+
+--- a/source-sc/NPC.v
++++ b/source-sc/NPC.v
+@@ -1,23 +0,0 @@
+-`include "ctrl_encode_def.v"
+-
+-module NPC( PC, NPCOp, IMM, RS1, NPC );  // next pc module
+-   input  [31:0] PC;        // pc
+-   input  [2:0]  NPCOp;     // next pc operation
+-   input  [31:0] IMM;       // immediate
+-   input  [31:0] RS1;       // rs1 data for jalr
+-   output reg [31:0] NPC;   // next pc
+-   
+-   wire [31:0] PCPLUS4;
+-   assign PCPLUS4 = PC + 4; // pc + 4
+-   
+-   always @(*) begin
+-      case (NPCOp)
+-          `NPC_PLUS4:  NPC = PCPLUS4;   // NPC computes addr
+-          `NPC_BRANCH: NPC = PC+IMM;    //B type, NPC computes addr
+-          `NPC_JUMP:   NPC = PC+IMM;    //J type, NPC computes addr
+-          `NPC_JALR:   NPC = (RS1 + IMM) & 32'hffff_fffe;
+-          default:     NPC = PCPLUS4;
+-      endcase
+-   end 
+-   
+-endmodule
+
+--- a/source-sc/PC.v
++++ b/source-sc/PC.v
+@@ -1,14 +0,0 @@
+-module PC( clk, rst, NPC, PC );
+-  input              clk;
+-  input              rst;
+-  input       [31:0] NPC;
+-  output reg  [31:0] PC;
+- 
+-   always @(posedge clk, posedge rst) begin
+-     if (rst) 
+-        PC <= 32'h0000_0000;
+-     else 
+-        PC <= NPC;
+-   end 
+- endmodule
+-
+
+--- a/source-sc/RF.v
++++ b/source-sc/RF.v
+@@ -1,32 +0,0 @@
+-  module RF(   input         clk, 
+-               input         rst,
+-               input         RFWr, 
+-               input  [4:0]  A1, A2, A3, 
+-               input  [31:0] WD, 
+-               output [31:0] RD1, RD2,
+-               input  [4:0]  reg_sel,
+-               output [31:0] reg_data
+-           );
+-
+-    reg [31:0] rf[31:0];
+-    integer i;
+-
+-    always @(posedge clk, posedge rst) begin
+-      if (rst) begin    //  reset
+-        for (i=1; i<32; i=i+1)
+-            rf[i] <= 0; 
+-      end
+-      
+-      else 
+-        if (RFWr) begin
+-          if(A3 != 5'b0) begin
+-              rf[A3] <= WD;
+-          end
+-        end
+-      end
+-
+-    assign RD1 = (A1 != 0) ? rf[A1] : 0;
+-    assign RD2 = (A2 != 0) ? rf[A2] : 0;
+-    assign reg_data = (reg_sel != 0) ? rf[reg_sel] : 0; 
+-
+-  endmodule 
+
+--- a/source-sc/SCCPU.v
++++ b/source-sc/SCCPU.v
+@@ -1,102 +0,0 @@
+-`include "ctrl_encode_def.v"
+-module SCCPU(
+-    input      clk,            // clock
+-    input      reset,          // reset
+-    input [31:0]  inst_in,     // instruction
+-    input [31:0]  Data_in,     // data from data memory
+-   
+-    output    mem_w,          // output: memory write signal
+-    output [31:0] PC_out,     // PC address
+-      // memory write
+-    output [31:0] Addr_out,   // ALU output
+-    output [31:0] Data_out,   // data to write data memory
+-
+-    input  [4:0] reg_sel,    // register selection (for debug use)
+-    output [31:0] reg_data  // selected register data (for debug use)
+-    );
+-
+-    wire        RegWrite;    // control signal to register write
+-    wire [5:0]  EXTOp;       // control signal to signed extension
+-    wire [4:0]  ALUOp;       // ALU opertion
+-    wire [2:0]  NPCOp;       // next PC operation
+-    wire [1:0]  WDSel;       // (register) write data selection
+-    wire        ALUSrc;      // ALU source for B
+-    wire        Zero;        // ALU ouput zero
+-    wire [31:0] NPC;         // next PC
+-    wire [4:0]  rs1;          // rs
+-    wire [4:0]  rs2;          // rt
+-    wire [4:0]  rd;          // rd
+-    wire [6:0]  Op;          // opcode
+-    wire [6:0]  Funct7;       // funct7
+-    wire [2:0]  Funct3;       // funct3
+-    wire [11:0] Imm12;       // 12-bit immediate
+-    wire [31:0] Imm32;       // 32-bit immediate
+-    wire [19:0] IMM;         // 20-bit immediate (address)
+-    wire [4:0]  A3;          // register address for write
+-    reg  [31:0] WD;          // register write data
+-    wire [31:0] RD1,RD2;     // register data specified by rs
+-    wire [31:0] B;           // operator for ALU B
+-	
+-	wire [4:0]  iimm_shamt;
+-	wire [11:0] iimm,simm,bimm;
+-	wire [19:0] uimm,jimm;
+-	wire [31:0] immout;
+-    wire [31:0] aluout;
+-    
+-    assign Addr_out=aluout;
+-	assign B = (ALUSrc) ? immout : RD2;
+-	assign Data_out = RD2;
+-	
+-	assign iimm=inst_in[31:20];
+-	assign simm={inst_in[31:25],inst_in[11:7]};
+-	assign uimm=inst_in[31:12];
+-	assign bimm={inst_in[31],inst_in[7],inst_in[30:25],inst_in[11:8]};
+-	assign jimm={inst_in[31],inst_in[19:12],inst_in[20],inst_in[30:21]};
+-
+-    assign Op = inst_in[6:0];  // instruction
+-    assign Funct7 = inst_in[31:25]; // funct7
+-    assign Funct3 = inst_in[14:12]; // funct3
+-    assign rs1 = inst_in[19:15];  // rs1
+-    assign rs2 = inst_in[24:20];  // rs2
+-    assign rd = inst_in[11:7];  // rd
+-    assign Imm12 = inst_in[31:20];// 12-bit immediate
+-    assign IMM = inst_in[31:12];  // 20-bit immediate
+-   
+-   // instantiation of control unit
+-	ctrl U_ctrl(
+-		.Op(Op), .Funct7(Funct7), .Funct3(Funct3), .Zero(Zero), 
+-		.RegWrite(RegWrite), .MemWrite(mem_w),
+-		.EXTOp(EXTOp), .ALUOp(ALUOp), .NPCOp(NPCOp), 
+-		.ALUSrc(ALUSrc), .WDSel(WDSel)
+-	);
+- // instantiation of pc unit
+-	PC  U_PC(.clk(clk), .rst(reset), .NPC(NPC), .PC(PC_out) );
+-	NPC U_NPC(.PC(PC_out), .NPCOp(NPCOp), .IMM(immout), .RS1(RD1), .NPC(NPC));
+-	EXT U_EXT(
+-		.iimm(iimm), .simm(simm), .bimm(bimm), .uimm(uimm), .jimm(jimm),
+-		.EXTOp(EXTOp), .immout(immout)
+-	);
+-	RF U_RF(
+-		.clk(clk), .rst(reset),
+-		.RFWr(RegWrite), 
+-		.A1(rs1), .A2(rs2), .A3(rd), 
+-		.WD(WD), 
+-		.RD1(RD1), .RD2(RD2),
+-		.reg_sel(reg_sel),
+-		.reg_data(reg_data)
+-	);
+-// instantiation of alu unit
+-	alu U_alu(.A(RD1), .B(B), .ALUOp(ALUOp), .C(aluout), .Zero(Zero));
+-
+-//please connnect the CPU by yourself
+-always @*
+-begin
+-	case(WDSel)
+-		`WDSel_FromALU: WD<=aluout;
+-		`WDSel_FromMEM: WD<=Data_in;
+-        `WDSel_FromPC:  WD<=PC_out+4;
+-        default: WD<=aluout;
+-	endcase
+-end
+-
+-endmodule
+
+--- a/source-sc/alu.v
++++ b/source-sc/alu.v
+@@ -1,41 +0,0 @@
+-`include "ctrl_encode_def.v"
+-
+-module alu(A, B, ALUOp, C, Zero);
+-   input  signed [31:0] A, B;
+-   input         [4:0]  ALUOp;
+-   output signed [31:0] C;
+-   output Zero;  //condition flag: set if condition is true for B-type instruction
+-   
+-   reg [31:0] C;
+-   integer    i;
+-       
+-   always @(*) begin
+-      case (ALUOp)
+-      `ALUOp_lui:  C = B;
+-      `ALUOp_add:  C = A + B;
+-      `ALUOp_sub:  C = A - B;
+-      `ALUOp_bne:  C = (A != B);
+-      `ALUOp_blt:  C = (A < B);
+-      `ALUOp_bge:  C = (A >= B);
+-      `ALUOp_bltu: C = ($unsigned(A) < $unsigned(B));
+-      `ALUOp_bgeu: C = ($unsigned(A) >= $unsigned(B));
+-      `ALUOp_slt:  C = (A < B) ? 32'd1 : 32'd0;
+-      `ALUOp_sltu: C = ($unsigned(A) < $unsigned(B)) ? 32'd1 : 32'd0;
+-      `ALUOp_xor:  C = A ^ B;
+-      `ALUOp_or:   C = A | B;
+-      `ALUOp_and:  C = A & B;
+-      `ALUOp_sll:  C = A << B[4:0];
+-      `ALUOp_srl:  C = $unsigned(A) >> B[4:0];
+-      `ALUOp_sra:  C = A >>> B[4:0];
+-      default:     C = A;
+-      endcase
+-   end
+-
+-   assign Zero = (ALUOp == `ALUOp_bne ||
+-                  ALUOp == `ALUOp_blt ||
+-                  ALUOp == `ALUOp_bge ||
+-                  ALUOp == `ALUOp_bltu ||
+-                  ALUOp == `ALUOp_bgeu) ? (C != 32'b0) : (C == 32'b0);
+-
+-endmodule
+-    
+
+--- a/source-sc/build.bat
++++ b/source-sc/build.bat
+@@ -1,129 +0,0 @@
+-@echo off
+-setlocal
+-
+-rem Lab-6 single-cycle CPU sid sorting simulation script for Windows.
+-rem Run this script in lab-6\source-sc.
+-rem Usage:
+-rem   build.bat        Build and run simulation
+-rem   build.bat build  Build only
+-rem   build.bat run    Build and run simulation
+-rem   build.bat wave   Build, run, and open GTKWave
+-rem   build.bat clean  Remove generated simulation files
+-
+-cd /d "%~dp0"
+-
+-set "OSS_CAD_ROOT=D:\oss-cad-suite\oss-cad-suite"
+-if exist "%OSS_CAD_ROOT%\bin\iverilog.exe" (
+-    set "PATH=%OSS_CAD_ROOT%\bin;%OSS_CAD_ROOT%\lib;%PATH%"
+-)
+-if exist "D:\iverilog\bin\iverilog.exe" (
+-    set "PATH=D:\iverilog\bin;%PATH%"
+-)
+-
+-set "TOP=sccomp_tb"
+-set "OUT=sccpu_sim.out"
+-set "VCD=sccpu_sid_sort.vcd"
+-set "ACTION=%~1"
+-
+-if "%ACTION%"=="" set "ACTION=run"
+-
+-if /I "%ACTION%"=="clean" goto clean
+-if /I "%ACTION%"=="build" goto check_tools
+-if /I "%ACTION%"=="run" goto check_tools
+-if /I "%ACTION%"=="wave" goto check_tools
+-
+-echo [ERROR] Unknown action: %ACTION%
+-echo Usage: build.bat [build^|run^|wave^|clean]
+-exit /b 1
+-
+-:check_tools
+-where iverilog >nul 2>nul
+-if errorlevel 1 (
+-    echo [ERROR] Cannot find iverilog. Please install OSS CAD Suite or add Icarus Verilog to PATH.
+-    exit /b 1
+-)
+-
+-where vvp >nul 2>nul
+-if errorlevel 1 (
+-    echo [ERROR] Cannot find vvp. Please install OSS CAD Suite or add Icarus Verilog to PATH.
+-    exit /b 1
+-)
+-
+-where gtkwave >nul 2>nul
+-if errorlevel 1 (
+-    echo [WARN] Cannot find gtkwave. Simulation can still run, but waveform opening is unavailable.
+-    set "HAS_GTKWAVE=0"
+-) else (
+-    set "HAS_GTKWAVE=1"
+-)
+-
+-goto build
+-
+-:build
+-echo [INFO] Building %OUT% ...
+-iverilog -I . -s %TOP% -o %OUT% ^
+-    alu.v ^
+-    ctrl.v ^
+-    dm.v ^
+-    EXT.v ^
+-    im.v ^
+-    NPC.v ^
+-    PC.v ^
+-    sccomp.v ^
+-    sccomp_tb.v ^
+-    SCCPU.v ^
+-    RF.v
+-
+-if errorlevel 1 (
+-    echo [ERROR] Build failed.
+-    exit /b 1
+-)
+-
+-if /I "%ACTION%"=="build" (
+-    echo [OK] Build finished: %OUT%
+-    exit /b 0
+-)
+-
+-goto run
+-
+-:run
+-echo [INFO] Running simulation ...
+-vvp %OUT%
+-if errorlevel 1 (
+-    echo [ERROR] Simulation failed.
+-    exit /b 1
+-)
+-
+-if exist "%VCD%" (
+-    echo [OK] Waveform generated: %VCD%
+-) else (
+-    echo [WARN] Simulation finished, but %VCD% was not found.
+-)
+-
+-if /I "%ACTION%"=="wave" goto wave
+-
+-echo [OK] Done.
+-exit /b 0
+-
+-:wave
+-if not exist "%VCD%" (
+-    echo [ERROR] Cannot find %VCD%. Please run build.bat run first.
+-    exit /b 1
+-)
+-
+-if "%HAS_GTKWAVE%"=="1" (
+-    echo [INFO] Opening GTKWave ...
+-    start "" gtkwave "%VCD%"
+-    echo [OK] Done.
+-    exit /b 0
+-)
+-
+-echo [ERROR] Cannot open GTKWave because gtkwave was not found in PATH.
+-exit /b 1
+-
+-:clean
+-if exist "%OUT%" del /f /q "%OUT%"
+-if exist "%VCD%" del /f /q "%VCD%"
+-if exist "*.log" del /f /q "*.log"
+-echo [OK] Clean finished.
+-exit /b 0
+
+--- a/source-sc/build.py
++++ b/source-sc/build.py
+@@ -1,145 +0,0 @@
+-#!/usr/bin/env python3
+-"""Lab-6 single-cycle CPU sid sorting simulation helper."""
+-
+-from __future__ import annotations
+-
+-import argparse
+-import os
+-import shutil
+-import subprocess
+-import sys
+-from pathlib import Path
+-
+-
+-ROOT = Path(__file__).resolve().parent
+-OSS_CAD_ROOT = Path(r"D:\oss-cad-suite\oss-cad-suite")
+-OSS_CAD_BIN = OSS_CAD_ROOT / "bin"
+-OSS_CAD_LIB = OSS_CAD_ROOT / "lib"
+-IVERILOG_ROOT = Path(r"D:\iverilog")
+-IVERILOG_BIN = IVERILOG_ROOT / "bin"
+-TOP = "sccomp_tb"
+-OUT = ROOT / "sccpu_sim.out"
+-VCD = ROOT / "sccpu_sid_sort.vcd"
+-
+-SRCS = [
+-    "alu.v",
+-    "ctrl.v",
+-    "dm.v",
+-    "EXT.v",
+-    "im.v",
+-    "NPC.v",
+-    "PC.v",
+-    "sccomp.v",
+-    "sccomp_tb.v",
+-    "SCCPU.v",
+-    "RF.v",
+-]
+-
+-
+-def require_tool(name: str) -> str:
+-    path = shutil.which(name)
+-    if path is None:
+-        candidate = OSS_CAD_BIN / f"{name}.exe"
+-        if candidate.exists():
+-            return str(candidate)
+-    if path is None:
+-        candidate = IVERILOG_BIN / f"{name}.exe"
+-        if candidate.exists():
+-            return str(candidate)
+-    if path is None:
+-        raise RuntimeError(f"Cannot find {name}. Please install it or add it to PATH.")
+-    return path
+-
+-
+-def run_command(cmd: list[str]) -> None:
+-    print("[CMD]", " ".join(cmd))
+-    env = dict(os.environ)
+-    if OSS_CAD_BIN.exists():
+-        env["PATH"] = f"{OSS_CAD_BIN};{OSS_CAD_LIB};" + env.get("PATH", "")
+-    if IVERILOG_BIN.exists():
+-        env["PATH"] = f"{IVERILOG_BIN};" + env.get("PATH", "")
+-    subprocess.run(cmd, cwd=ROOT, check=True, env=env)
+-
+-
+-def build() -> None:
+-    iverilog = require_tool("iverilog")
+-    cmd = [
+-        iverilog,
+-        "-I",
+-        ".",
+-        "-s",
+-        TOP,
+-        "-o",
+-        OUT.name,
+-        *SRCS,
+-    ]
+-    run_command(cmd)
+-
+-
+-def simulate() -> None:
+-    vvp = require_tool("vvp")
+-    run_command([vvp, OUT.name])
+-    if VCD.exists():
+-        print(f"[OK] Waveform generated: {VCD.name}")
+-    else:
+-        print(f"[WARN] Simulation finished, but {VCD.name} was not found.")
+-
+-
+-def open_wave() -> None:
+-    gtkwave = shutil.which("gtkwave")
+-    if gtkwave is None:
+-        raise RuntimeError("Cannot find gtkwave. Please add GTKWave to PATH or open sccpu_sid_sort.vcd manually.")
+-    if not VCD.exists():
+-        raise RuntimeError(f"Cannot find {VCD.name}. Please run build.py run first.")
+-    subprocess.Popen([gtkwave, VCD.name], cwd=ROOT)
+-    print(f"[OK] GTKWave opened: {VCD.name}")
+-
+-
+-def clean() -> None:
+-    removed = False
+-    for path in (OUT, VCD):
+-        if path.exists():
+-            path.unlink()
+-            removed = True
+-            print(f"[OK] Removed {path.name}")
+-
+-    for path in ROOT.glob("*.log"):
+-        path.unlink()
+-        removed = True
+-        print(f"[OK] Removed {path.name}")
+-
+-    if not removed:
+-        print("[OK] Nothing to clean.")
+-
+-
+-def main() -> int:
+-    parser = argparse.ArgumentParser(description="Lab-6 single-cycle CPU sid sorting simulation helper")
+-    parser.add_argument(
+-        "target",
+-        nargs="?",
+-        default="run",
+-        choices=("build", "run", "wave", "clean"),
+-        help="build: compile only; run: compile and simulate; wave: run and open GTKWave; clean: remove outputs",
+-    )
+-    args = parser.parse_args()
+-
+-    try:
+-        if args.target == "build":
+-            build()
+-        elif args.target == "run":
+-            build()
+-            simulate()
+-        elif args.target == "wave":
+-            build()
+-            simulate()
+-            open_wave()
+-        elif args.target == "clean":
+-            clean()
+-    except (RuntimeError, subprocess.CalledProcessError) as exc:
+-        print(f"[ERROR] {exc}")
+-        return 1
+-    return 0
+-
+-
+-if __name__ == "__main__":
+-    sys.exit(main())
+
+--- a/source-sc/clk_div.v
++++ b/source-sc/clk_div.v
+@@ -0,0 +1,21 @@
++`timescale 1ns / 1ps
++
++module clk_div(
++    input clk,
++    input rst,
++    input SW15,
++    output Clk_CPU
++);
++
++    reg [31:0] clkdiv;
++
++    always @(posedge clk or posedge rst) begin
++        if (rst)
++            clkdiv <= 32'b0;
++        else
++            clkdiv <= clkdiv + 1'b1;
++    end
++
++    assign Clk_CPU = SW15 ? clkdiv[25] : clkdiv[2];
++
++endmodule
+
+--- a/source-sc/ctrl.v
++++ b/source-sc/ctrl.v
+@@ -1,129 +0,0 @@
+-`include "ctrl_encode_def.v"
+-
+-module ctrl(Op, Funct7, Funct3, Zero,
+-            RegWrite, MemWrite,
+-            EXTOp, ALUOp, NPCOp,
+-            ALUSrc, WDSel
+-            );
+-
+-   input  [6:0] Op;
+-   input  [6:0] Funct7;
+-   input  [2:0] Funct3;
+-   input        Zero;
+-
+-   output reg       RegWrite;
+-   output reg       MemWrite;
+-   output reg [5:0] EXTOp;
+-   output reg [4:0] ALUOp;
+-   output reg [2:0] NPCOp;
+-   output reg       ALUSrc;
+-   output reg [1:0] WDSel;
+-
+-   always @(*) begin
+-      RegWrite = 1'b0;
+-      MemWrite = 1'b0;
+-      EXTOp    = 6'b0;
+-      ALUOp    = `ALUOp_nop;
+-      NPCOp    = `NPC_PLUS4;
+-      ALUSrc   = 1'b0;
+-      WDSel    = `WDSel_FromALU;
+-
+-      case (Op)
+-      7'b0110111: begin // lui
+-         RegWrite = 1'b1;
+-         ALUSrc   = 1'b1;
+-         EXTOp    = `EXT_CTRL_UTYPE;
+-         ALUOp    = `ALUOp_lui;
+-      end
+-
+-      7'b0110011: begin // R-type
+-         RegWrite = 1'b1;
+-         case ({Funct7, Funct3})
+-         {7'b0000000, 3'b000}: ALUOp = `ALUOp_add;
+-         {7'b0100000, 3'b000}: ALUOp = `ALUOp_sub;
+-         {7'b0000000, 3'b010}: ALUOp = `ALUOp_slt;
+-         {7'b0000000, 3'b011}: ALUOp = `ALUOp_sltu;
+-         {7'b0000000, 3'b100}: ALUOp = `ALUOp_xor;
+-         {7'b0000000, 3'b110}: ALUOp = `ALUOp_or;
+-         {7'b0000000, 3'b111}: ALUOp = `ALUOp_and;
+-         {7'b0000000, 3'b001}: ALUOp = `ALUOp_sll;
+-         {7'b0000000, 3'b101}: ALUOp = `ALUOp_srl;
+-         {7'b0100000, 3'b101}: ALUOp = `ALUOp_sra;
+-         default: begin
+-            RegWrite = 1'b0;
+-            ALUOp = `ALUOp_nop;
+-         end
+-         endcase
+-      end
+-
+-      7'b0010011: begin // I-type arithmetic
+-         RegWrite = 1'b1;
+-         ALUSrc   = 1'b1;
+-         EXTOp    = `EXT_CTRL_ITYPE;
+-         case (Funct3)
+-         3'b000: ALUOp = `ALUOp_add;  // addi
+-         3'b010: ALUOp = `ALUOp_slt;  // slti
+-         3'b011: ALUOp = `ALUOp_sltu; // sltiu
+-         3'b100: ALUOp = `ALUOp_xor;  // xori
+-         3'b110: ALUOp = `ALUOp_or;   // ori
+-         3'b111: ALUOp = `ALUOp_and;  // andi
+-         3'b001: ALUOp = (Funct7 == 7'b0000000) ? `ALUOp_sll : `ALUOp_nop;
+-         3'b101: ALUOp = (Funct7 == 7'b0100000) ? `ALUOp_sra : `ALUOp_srl;
+-         default: begin
+-            RegWrite = 1'b0;
+-            ALUOp = `ALUOp_nop;
+-         end
+-         endcase
+-      end
+-
+-      7'b0000011: begin // lw
+-         RegWrite = 1'b1;
+-         ALUSrc   = 1'b1;
+-         EXTOp    = `EXT_CTRL_ITYPE;
+-         ALUOp    = `ALUOp_add;
+-         WDSel    = `WDSel_FromMEM;
+-      end
+-
+-      7'b0100011: begin // sw
+-         MemWrite = 1'b1;
+-         ALUSrc   = 1'b1;
+-         EXTOp    = `EXT_CTRL_STYPE;
+-         ALUOp    = `ALUOp_add;
+-      end
+-
+-      7'b1100011: begin // branches
+-         EXTOp = `EXT_CTRL_BTYPE;
+-         case (Funct3)
+-         3'b000: begin ALUOp = `ALUOp_sub;  NPCOp = Zero ? `NPC_BRANCH : `NPC_PLUS4; end // beq
+-         3'b001: begin ALUOp = `ALUOp_bne;  NPCOp = Zero ? `NPC_BRANCH : `NPC_PLUS4; end // bne
+-         3'b100: begin ALUOp = `ALUOp_blt;  NPCOp = Zero ? `NPC_BRANCH : `NPC_PLUS4; end // blt
+-         3'b101: begin ALUOp = `ALUOp_bge;  NPCOp = Zero ? `NPC_BRANCH : `NPC_PLUS4; end // bge
+-         3'b110: begin ALUOp = `ALUOp_bltu; NPCOp = Zero ? `NPC_BRANCH : `NPC_PLUS4; end // bltu
+-         3'b111: begin ALUOp = `ALUOp_bgeu; NPCOp = Zero ? `NPC_BRANCH : `NPC_PLUS4; end // bgeu
+-         default: begin ALUOp = `ALUOp_nop; NPCOp = `NPC_PLUS4; end
+-         endcase
+-      end
+-
+-      7'b1101111: begin // jal
+-         RegWrite = 1'b1;
+-         EXTOp    = `EXT_CTRL_JTYPE;
+-         NPCOp    = `NPC_JUMP;
+-         WDSel    = `WDSel_FromPC;
+-      end
+-
+-      7'b1100111: begin // jalr
+-         RegWrite = 1'b1;
+-         ALUSrc   = 1'b1;
+-         EXTOp    = `EXT_CTRL_ITYPE;
+-         ALUOp    = `ALUOp_add;
+-         NPCOp    = `NPC_JALR;
+-         WDSel    = `WDSel_FromPC;
+-      end
+-
+-      default: begin
+-         RegWrite = 1'b0;
+-         MemWrite = 1'b0;
+-      end
+-      endcase
+-   end
+-endmodule
+
+--- a/source-sc/ctrl_encode_def.v
++++ b/source-sc/ctrl_encode_def.v
+@@ -1,56 +0,0 @@
+-`timescale 1ns/1ns
+-
+-// NPC control signal
+-`define NPC_PLUS4   3'b000
+-`define NPC_BRANCH  3'b001
+-`define NPC_JUMP    3'b010
+-`define NPC_JALR    3'b100
+-
+-// ALU control signal
+-`define ALU_NOP   3'b000 
+-`define ALU_ADD   3'b001
+-`define ALU_SUB   3'b010 
+-`define ALU_AND   3'b011
+-`define ALU_OR    3'b100
+-
+-//EXT CTRL itype, stype, btype, utype, jtype
+-`define EXT_CTRL_ITYPE_SHAMT 6'b100000
+-`define EXT_CTRL_ITYPE	6'b010000
+-`define EXT_CTRL_STYPE	6'b001000
+-`define EXT_CTRL_BTYPE	6'b000100
+-`define EXT_CTRL_UTYPE	6'b000010
+-`define EXT_CTRL_JTYPE	6'b000001
+-
+-`define GPRSel_RD 2'b00
+-`define GPRSel_RT 2'b01
+-`define GPRSel_31 2'b10
+-
+-`define WDSel_FromALU 2'b00
+-`define WDSel_FromMEM 2'b01
+-`define WDSel_FromPC 2'b10
+-
+-`define ALUOp_nop 5'b00000
+-`define ALUOp_lui 5'b00001
+-`define ALUOp_auipc 5'b00010
+-`define ALUOp_add 5'b00011
+-`define ALUOp_sub 5'b00100
+-`define ALUOp_bne 5'b00101
+-`define ALUOp_blt 5'b00110
+-`define ALUOp_bge 5'b00111
+-`define ALUOp_bltu 5'b01000
+-`define ALUOp_bgeu 5'b01001
+-`define ALUOp_slt 5'b01010
+-`define ALUOp_sltu 5'b01011
+-`define ALUOp_xor 5'b01100
+-`define ALUOp_or 5'b01101
+-`define ALUOp_and 5'b01110
+-`define ALUOp_sll 5'b01111
+-`define ALUOp_srl 5'b10000
+-`define ALUOp_sra 5'b10001
+-
+-`define dm_word 3'b000
+-`define dm_halfword 3'b001
+-`define dm_halfword_unsigned 3'b010
+-`define dm_byte 3'b011
+-`define dm_byte_unsigned 3'b100
+-
+
+--- a/source-sc/dm.v
++++ b/source-sc/dm.v
+@@ -1,22 +0,0 @@
+-`include "ctrl_encode_def.v"
+-// data memory
+-module dm(clk, DMWr, addr, din, dout);
+-   input          clk;
+-   input          DMWr;
+-   input  [31:0]  addr;
+-   input  [31:0]  din;
+-   output reg [31:0]  dout;
+-   
+-   reg [31:0] dmem[127:0];
+-   
+-   always @(posedge clk)
+-      if (DMWr) begin
+-         dmem[addr[8:2]] <= din;
+-      end
+-   
+-     //load
+-     always @(*) begin
+-         dout <= dmem[addr[8:2]];
+-     end
+-     
+-endmodule    
+
+--- a/source-sc/im.v
++++ b/source-sc/im.v
+@@ -1,6 +0,0 @@
+-// instruction memory
+-module im(input  [31:2]  addr, output [31:0] dout);
+-  reg  [31:0] RAM[127:0];
+-
+-  assign dout = RAM[addr]; // word aligned
+-endmodule  
+
+--- a/source-sc/imem.v
++++ b/source-sc/imem.v
+@@ -0,0 +1,20 @@
++module imem #(
++    parameter INIT_FILE = "rv32_sid_sort_fpga.mem"
++)(
++    input [6:0] a,
++    output [31:0] spo
++);
++
++    (* rom_style = "block" *) reg [31:0] rom [0:127];
++    integer i;
++
++    initial begin
++        for (i = 0; i < 128; i = i + 1) begin
++            rom[i] = 32'h0000_0013;
++        end
++        $readmemh(INIT_FILE, rom);
++    end
++
++    assign spo = rom[a];
++
++endmodule
+
+--- a/source-sc/lab6_sid_sort_fpga_top.v
++++ b/source-sc/lab6_sid_sort_fpga_top.v
+@@ -0,0 +1,105 @@
++`timescale 1ns / 1ps
++
++module lab6_sid_sort_fpga_top(
++    input clk,
++    input rstn,
++    input [15:0] sw_i,
++    output [7:0] disp_seg_o,
++    output [7:0] disp_an_o
++);
++
++    wire rst;
++    assign rst = ~rstn;
++
++    wire Clk_CPU;
++    wire [31:0] instr;
++    wire [31:0] pc;
++    wire memwrite;
++
++    wire [31:0] cpu_data_out;
++    wire [31:0] cpu_data_addr;
++    wire [31:0] cpu_data_in;
++    wire [31:0] reg_data;
++
++    wire [31:0] dm_din;
++    wire [31:0] dm_dout;
++    wire [6:0] ram_addr;
++    wire ram_we;
++    wire [31:0] cpuseg7_data;
++    wire seg7_we;
++    wire [31:0] seg7_data;
++
++    clk_div U_CLKDIV(
++        .clk(clk),
++        .rst(rst),
++        .SW15(sw_i[15]),
++        .Clk_CPU(Clk_CPU)
++    );
++
++    SCCPU U_SCCPU(
++        .clk(Clk_CPU),
++        .reset(rst),
++        .inst_in(instr),
++        .Data_in(cpu_data_in),
++        .mem_w(memwrite),
++        .PC_out(pc),
++        .Addr_out(cpu_data_addr),
++        .Data_out(cpu_data_out),
++        .reg_sel(sw_i[4:0]),
++        .reg_data(reg_data)
++    );
++
++    imem U_IM(
++        .a(pc[8:2]),
++        .spo(instr)
++    );
++
++    dm U_DM(
++        .clk(Clk_CPU),
++        .DMWr(ram_we),
++        .addr({23'b0, ram_addr, 2'b00}),
++        .din(dm_din),
++        .dout(dm_dout)
++    );
++
++    MIO_BUS U_MIO(
++        .sw_i(sw_i),
++        .mem_w(memwrite),
++        .cpu_data_out(cpu_data_out),
++        .cpu_data_addr(cpu_data_addr),
++        .ram_data_out(dm_dout),
++        .cpu_data_in(cpu_data_in),
++        .ram_data_in(dm_din),
++        .ram_addr(ram_addr),
++        .cpuseg7_data(cpuseg7_data),
++        .ram_we(ram_we),
++        .seg7_we(seg7_we)
++    );
++
++    Multi_CH32 U_Multi(
++        .clk(clk),
++        .rst(rst),
++        .EN(seg7_we),
++        .ctrl(sw_i[5:0]),
++        .Data0(cpuseg7_data),
++        .data1({2'b0, pc[31:2]}),
++        .data2(pc),
++        .data3(instr),
++        .data4(cpu_data_addr),
++        .data5(cpu_data_out),
++        .data6(dm_dout),
++        .data7({23'b0, ram_addr, 2'b00}),
++        .reg_data(reg_data),
++        .seg7_data(seg7_data)
++    );
++
++    seg7x16 U_7SEG(
++        .clk(clk),
++        .rst(rst),
++        .cs(1'b1),
++        .i_data(seg7_data),
++        .o_seg(disp_seg_o),
++        .o_sel(disp_an_o)
++    );
++
++endmodule
+
+--- a/source-sc/rv32_sid_sort_fpga.mem
++++ b/source-sc/rv32_sid_sort_fpga.mem
+@@ -0,0 +1,55 @@
++00200113
++00811113
++01810113
++01011113
++01100193
++00819193
++06418193
++00310133
++18202023
++00800593
++18002783
++00000133
++00f00213
++0047f3b3
++00211493
++0093d3b3
++00421293
++00010633
++000386b3
++00110193
++02b18663
++0057f433
++00219513
++00a45433
++0086a733
++00070663
++000406b3
++00018633
++00429293
++00118193
++fd9ff06f
++00c12733
++00070463
++02c000ef
++00421213
++00110113
++fab112e3
++18f02223
++ffff0137
++00416093
++00c16113
++30000293
++1002f293
++fe9ff06f
++00f00293
++00261513
++00a292b3
++00526333
++fff34313
++0067f7b3
++00969433
++0087e7b3
++00a393b3
++0077e7b3
++00008067
+
+--- a/source-sc/rv32_sid_sort_sim.asm
++++ b/source-sc/rv32_sid_sort_sim.asm
+@@ -1,157 +0,0 @@
+-##########################################################################################
+-#
+-# Designer: Qin Liu
+-#
+-# Description:
+-# As part of the project of Computer Organization Experiments, Wuhan University
+-# Spring 2025
+-# RISCV assembly code for sorting the sid digital numbers in the acending order for FPGA.
+-#
+-##########################################################################################
+-
+-##########################################################################################
+-# C pseudocode for acending order sorting the sid digital numbers.
+-##########################################################################################
+-#   sortedsid = sid;
+-#   mask0 = 0x0f;
+-#   each iteration selects the largest digital number from the unprocessed digital numbers
+-#   for (int i= 0; i < 8; i++) {
+-#       a = sortedsid & mask0; // each time a hex digital is extracted and processed
+-#       a = a >> (4 * i); // move to last position, a is the number to be sorted
+-#       mask1 = mask0 << 4;
+-#       bestj = i;
+-#       tmpMax = a;
+-#       for (int j = i + 1; j < 8) {
+-#       b = sortedsid & mask1;
+-#       b = b >> (4 * j);
+-#       if (tmpMax < b) {
+-#          tmpMax = b;
+-#          bestj = j;
+-#       }
+-#       mask1 = mask1 << 4;
+-#     }
+-#     if (a < tmpMax) { // to swap the digitals a and tmpMax, which positions are i and bestj respectively
+-#         mask1 = 0x0f;
+-#         bestj4 = bestj << 2;
+-#         mask1 = mask1 << bestj4
+-#         mask2 = mask0 | mask1;
+-#         mask2 = ~mask2;
+-#         sortedsid = sortedsid & mask2;  // the digitials at i and j are set to 0, with others remaining unchanged
+-#         tmpMax = tmpMax << (4 * i);
+-#         sortedsid = sortedsid | tmpMax;
+-#         a = a << bestj4;
+-#         sortedsid = sortedsid | a;
+-#       }
+-#     mask0 = mask0 << 4;
+-#   }
+-##########################################################################################
+-# the uasge of the registers
+-##########################################################################################
+-# mem[0x180], student id.
+-# mem[0x184], sorted student id
+-# x15, partially sorted student number
+-# x1, the address of switch
+-# x2, the outer loop variable i / the address of seg7
+-# x3, the inner loop variable j / the switch input
+-# x4, mask0
+-# x5, mask1
+-# x6, mask2
+-# x7, a
+-# x8, b
+-# x9, 4 * i
+-# x10, 4 * j
+-# x11, N = 8
+-# x12, bestj
+-# x13, tmpMax
+-# x14, compare result
+-##########################################################################################
+-# RISCV assembly language program for sorting the student id.
+-# The following instructions are used.
+-# 9 + 9 instructions
+-# R: add or slt + and sll srl
+-# I: addi lw + andi ori slli xori jalr
+-# S: sw
+-# B: beq + bne
+-# J: jal
+-# U: lui
+-
+-##########################################################################################
+-      addi    x2, x0, 0x02        # This is the BCD encoding for the studnet id: a hex digit for each decimal digit
+-      slli    x2, x2, 8
+-      addi    x2, x2, 0x18
+-      slli    x2, x2, 16
+-      addi    x3, x0, 0x11
+-      slli    x3, x3, 8
+-      addi    x3, x3, 0x64
+-      add     x2, x2, x3          # set the student id, USE YOUR OWN STUDENT NO.!!!
+-      sw      x2, 0x180(x0)       # store the original sid at data memory
+-      addi    x11, x0, 8          # the size of sid, N = 8
+-      lw      x15, 0x180(x0)      # x15 = [0x180] = sid
+-      add     x2, x0, x0          # the outer loop variable initilization, i = 0,
+-      addi    x4, x0, 0x0f        # mask0 = 0xf
+-loop1:
+-      and     x7, x15, x4         # a = sortedsid & mask0, get the BCD to be processed
+-      slli    x9, x2, 2           # (4 * i)
+-      srl     x7, x7, x9          # a = a >> (4 * i), shift the BCD to the LSB 4 bits
+-      slli    x5, x4, 4           # mask1 = mask0 << 4
+-      add     x12, x2, x0         # bestj = i, remmember the position of the largest BCD in this loop
+-      add     x13, x7, x0         # tmpMax = a, remember the largest BCD in this loop
+-      addi    x3, x2, 1           # j = i + 1, the inner loop variable initilization, j = i + 1
+-loop2:
+-      beq     x3, x11, checkswap  # to check if j == 8
+-      and     x8, x15, x5         # b = sortedsid & mask1
+-      slli    x10, x3, 2          # (4 * j)
+-      srl     x8, x8, x10         # b = b >> (4 * j), shift the BCD to the LSB 4 bits
+-      slt     x14, x13, x8        #
+-      beq     x14, x0, incrLoop2  # if (tmpMax >= b), increase j
+-      add     x13, x8, x0         # tmpMax = b, remember the largest BCD in this loop
+-      add     x12, x3, x0         # bestj = j, remmember the position of the largest BCD in this loop
+-incrLoop2:
+-      slli    x5, x5, 4           # mask1 = mask1 << 4
+-      addi    x3, x3, 1           # j = j + 1
+-      jal     x0, loop2
+-checkswap:
+-      slt     x14, x2, x12        # to check if the position of the largest BCD in the this loop has been changed
+-      beq     x14, x0, incrLoop1
+-      jal     x1, swap
+-incrLoop1:
+-      slli    x4, x4, 4           # mask0 = mask0 << 4
+-      addi    x2, x2, 1           # i = i + 1
+-      bne     x2, x11, loop1      # to check if i <> 8
+-
+-result:
+-      sw      x15, 0x184(x0)      # [0x184] = sortedsid
+-      
+-########################  
+-# sorting finished
+-########################  
+-      lui     x2, 0xffff0         # x2 = 0xffff0000
+-      ori     x1, x2, 0x004       # x1 = 0xffff0004
+-      ori     x2, x2, 0x00c       # x2 = 0xffff000c
+-      addi    x5, x0, 0x300       # x5 = 0x00000300
+-      andi    x5, x5, 0x100       # x5 = 0x00000100
+-end:  jal     x0, result          # jump to result, dead loop
+-############
+-# the above code: a deadloop
+-# at the label end, the values in memory and registers should be:
+-# mem[0x180] = mem[384] = unsorted student id
+-# mem[0x184] = mem[388] = sorted student id
+-# x1 = 0xffff0004
+-# x2 = 0xffff000c
+-# x5 = 0x00000100
+-
+-############
+-#swap procedure
+-############  
+-swap:                             # change the nibble at i with the nibble at bestj
+-      addi    x5, x0, 0x0f
+-      slli    x10, x12, 2         # 4 * bestj
+-      sll     x5, x5, x10         # mask1 = mask (4 * bestj)
+-      or      x6, x4, x5          # mask2 = mask0 | mask1
+-      xori    x6, x6, -1          # mask2 = ~mask2
+-      and     x15, x15, x6        # sortedsid = sortedsid & mask2
+-      sll     x8, x13,x9          # tmpmax = tmpmax << (4*i)
+-      or      x15, x15, x8        # sortedsid = sortedsid | tmpmax
+-      sll     x7, x7, x10         # a = a << (4 * bestj)
+-      or      x15, x15, x7        # sortedsid = sortedsid | a
+-      jalr    x0, x1, 0
+
+--- a/source-sc/sccomp.v
++++ b/source-sc/sccomp.v
+@@ -1,64 +0,0 @@
+-`include "ctrl_encode_def.v"
+-module sccomp(clk, rstn, reg_sel, reg_data);
+-   input          clk, rstn; 
+-   input [4:0]    reg_sel;
+-   output [31:0]  reg_data;
+-   
+-   wire [31:0]    instr;
+-   wire [31:0]    PC;
+-   wire           MemWrite;
+-   wire [31:0]    dm_addr, dm_din, dm_dout;
+-   
+-   wire reset;
+-   assign reset = rstn;
+-   
+-   // instantiation of single-cycle CPU   
+-   SCCPU U_SCCPU(
+-         .clk(clk),                   // input:  cpu clock
+-         .reset(reset),               // input:  reset
+-         .inst_in(instr),             // input:  instruction
+-         .Data_in(dm_dout),           // input:  data to cpu  
+-         .mem_w(MemWrite),            // output: memory write signal
+-         .PC_out(PC),                 // output: PC to im
+-         .Addr_out(dm_addr),          // output: address from cpu to memory/dm
+-         .Data_out(dm_din),           // output: data from cpu to memory/dm
+-         .reg_sel(reg_sel),         // input:  register selection
+-         .reg_data(reg_data)        // output: register data
+-         );
+-   
+-   dm    U_DM(
+-         .clk(clk),           // input:  cpu clock
+-         .DMWr(MemWrite),     // input:  ram write
+-         .addr(dm_addr),      // input:  ram address
+-         .din(dm_din),         // input:  data to ram
+-         .dout(dm_dout)        // output: data from ram
+-         );
+-         
+-  // instantiation of intruction memory (used for simulation)
+-   im    U_imem ( 
+-         .addr(PC[31:2]),     // input:  rom address
+-         .dout(instr)        // output: instruction
+-         );
+-  
+-endmodule
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+
+--- a/source-sc/sccomp_tb.v
++++ b/source-sc/sccomp_tb.v
+@@ -1,73 +0,0 @@
+-`timescale 1ns/1ns
+-
+-module sccomp_tb();
+-  reg clk;
+-  reg rstn;
+-  reg [4:0] reg_sel;
+-  wire [31:0] reg_data;
+-
+-  integer errors;
+-  integer i;
+-
+-  sccomp sccomp(.clk(clk), .rstn(rstn), .reg_sel(reg_sel), .reg_data(reg_data));
+-
+-  initial begin
+-    $readmemh("rv32_sid_sort_sim.dat", sccomp.U_imem.RAM, 0, 54);
+-    for (i = 0; i < 128; i = i + 1) begin
+-      sccomp.U_DM.dmem[i] = 32'h0000_0000;
+-    end
+-
+-    clk = 1'b1;
+-    rstn = 1'b1;
+-    reg_sel = 5'd0;
+-    errors = 0;
+-    #10;
+-    rstn = 1'b0;
+-  end
+-
+-  always begin
+-    #5 clk = ~clk;
+-  end
+-
+-  initial begin
+-    $dumpfile("sccpu_sid_sort.vcd");
+-    $dumpvars(0, sccomp_tb);
+-
+-    #5000;
+-
+-    if (sccomp.U_DM.dmem[96] !== 32'h0218_1164) begin
+-      $display("[FAIL] mem[0x180] expected original sid 0x02181164, got %h", sccomp.U_DM.dmem[96]);
+-      errors = errors + 1;
+-    end
+-    if (sccomp.U_DM.dmem[97] !== 32'h0111_2468) begin
+-      $display("[FAIL] mem[0x184] expected sorted sid 0x01112468, got %h", sccomp.U_DM.dmem[97]);
+-      errors = errors + 1;
+-    end
+-    if (sccomp.U_SCCPU.U_RF.rf[1] !== 32'hffff_0004) begin
+-      $display("[FAIL] x1 expected 0xffff0004, got %h", sccomp.U_SCCPU.U_RF.rf[1]);
+-      errors = errors + 1;
+-    end
+-    // The program ends in a dead loop that repeatedly rewrites x2 during display setup.
+-    // Depending on the sorting path length, x2 may be sampled at either legal loop state.
+-    if (sccomp.U_SCCPU.U_RF.rf[2] !== 32'hffff_0000 &&
+-        sccomp.U_SCCPU.U_RF.rf[2] !== 32'hffff_000c) begin
+-      $display("[FAIL] x2 expected 0xffff0000 or 0xffff000c, got %h", sccomp.U_SCCPU.U_RF.rf[2]);
+-      errors = errors + 1;
+-    end
+-    if (sccomp.U_SCCPU.U_RF.rf[5] !== 32'h0000_0100) begin
+-      $display("[FAIL] x5 expected 0x00000100, got %h", sccomp.U_SCCPU.U_RF.rf[5]);
+-      errors = errors + 1;
+-    end
+-
+-    $display("[RESULT] original_sid=%h", sccomp.U_DM.dmem[96]);
+-    $display("[RESULT] sorted_sid=%h", sccomp.U_DM.dmem[97]);
+-
+-    if (errors == 0)
+-      $display("[PASS] lab-6 sid sorting simulation passed.");
+-    else
+-      $display("[FAIL] lab-6 sid sorting simulation failed with %0d error(s).", errors);
+-
+-    #20;
+-    $finish;
+-  end
+-endmodule
+
+--- a/source-sc/seg7x16.v
++++ b/source-sc/seg7x16.v
+@@ -0,0 +1,96 @@
++`timescale 1ns / 1ps
++
++module seg7x16(
++    input clk,
++    input rst,
++    input cs,
++    input [31:0] i_data,
++    output [7:0] o_seg,
++    output [7:0] o_sel
++);
++
++    reg [14:0] cnt;
++    reg [2:0] seg7_addr;
++    reg [7:0] o_sel_r;
++    reg [31:0] i_data_store;
++    reg [7:0] seg_data_r;
++    reg [7:0] o_seg_r;
++
++    wire seg7_clk = cnt[14];
++
++    always @(posedge clk or posedge rst) begin
++        if (rst)
++            cnt <= 15'b0;
++        else
++            cnt <= cnt + 1'b1;
++    end
++
++    always @(posedge seg7_clk or posedge rst) begin
++        if (rst)
++            seg7_addr <= 3'b0;
++        else
++            seg7_addr <= seg7_addr + 1'b1;
++    end
++
++    always @* begin
++        case (seg7_addr)
++        3'd7: o_sel_r = 8'b01111111;
++        3'd6: o_sel_r = 8'b10111111;
++        3'd5: o_sel_r = 8'b11011111;
++        3'd4: o_sel_r = 8'b11101111;
++        3'd3: o_sel_r = 8'b11110111;
++        3'd2: o_sel_r = 8'b11111011;
++        3'd1: o_sel_r = 8'b11111101;
++        default: o_sel_r = 8'b11111110;
++        endcase
++    end
++
++    always @(posedge clk or posedge rst) begin
++        if (rst)
++            i_data_store <= 32'b0;
++        else if (cs)
++            i_data_store <= i_data;
++    end
++
++    always @* begin
++        case (seg7_addr)
++        3'd0: seg_data_r = i_data_store[3:0];
++        3'd1: seg_data_r = i_data_store[7:4];
++        3'd2: seg_data_r = i_data_store[11:8];
++        3'd3: seg_data_r = i_data_store[15:12];
++        3'd4: seg_data_r = i_data_store[19:16];
++        3'd5: seg_data_r = i_data_store[23:20];
++        3'd6: seg_data_r = i_data_store[27:24];
++        default: seg_data_r = i_data_store[31:28];
++        endcase
++    end
++
++    always @(posedge clk or posedge rst) begin
++        if (rst)
++            o_seg_r <= 8'hFF;
++        else begin
++            case (seg_data_r[3:0])
++            4'h0: o_seg_r <= 8'hC0;
++            4'h1: o_seg_r <= 8'hF9;
++            4'h2: o_seg_r <= 8'hA4;
++            4'h3: o_seg_r <= 8'hB0;
++            4'h4: o_seg_r <= 8'h99;
++            4'h5: o_seg_r <= 8'h92;
++            4'h6: o_seg_r <= 8'h82;
++            4'h7: o_seg_r <= 8'hF8;
++            4'h8: o_seg_r <= 8'h80;
++            4'h9: o_seg_r <= 8'h90;
++            4'hA: o_seg_r <= 8'h88;
++            4'hB: o_seg_r <= 8'h83;
++            4'hC: o_seg_r <= 8'hC6;
++            4'hD: o_seg_r <= 8'hA1;
++            4'hE: o_seg_r <= 8'h86;
++            default: o_seg_r <= 8'h8E;
++            endcase
++        end
++    end
++
++    assign o_sel = o_sel_r;
++    assign o_seg = o_seg_r;
++
++endmodule
